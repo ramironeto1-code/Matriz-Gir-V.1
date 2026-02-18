@@ -1,92 +1,51 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+import { AIAnalysis } from "../types";
 
-const analysisSchema = {
-  type: Type.OBJECT,
-  properties: {
-    risks: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          type: { type: Type.STRING, description: "Tipo de risco baseado na Resolução 4557" },
-          justification: { type: Type.STRING, description: "Justificativa técnica da tipificação" },
-          probability: { type: Type.INTEGER, description: "Probabilidade (1 a 5)" },
-          impact: { type: Type.INTEGER, description: "Impacto (1 a 5)" },
-          normativeCitation: { type: Type.STRING, description: "Referência à 4557 ou normas correlatas" }
-        },
-        required: ["type", "justification", "probability", "impact", "normativeCitation"]
-      }
-    },
-    suggestedControl: { type: Type.STRING },
-    mitigationSuggested: { type: Type.STRING },
-    mitigationControls: {
-      type: Type.ARRAY,
-      description: "Três tipos de controles sugeridos: Preventivo, Detectivo e Corretivo.",
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          type: { type: Type.STRING, enum: ["Preventivo", "Detectivo", "Corretivo"] },
-          title: { type: Type.STRING },
-          description: { type: Type.STRING }
-        },
-        required: ["type", "title", "description"]
-      }
-    },
-    controlEffectiveness: { type: Type.INTEGER },
-    rasStatus: { type: Type.STRING, enum: ["Dentro", "Alerta", "Fora"] },
-    rasJustification: { type: Type.STRING },
-    rasSource: { type: Type.STRING },
-    crossLineImpacts: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: { businessLineId: { type: Type.STRING }, reason: { type: Type.STRING } },
-        required: ["businessLineId", "reason"]
-      }
-    },
-    resolution4557Reference: { type: Type.STRING }
-  },
-  required: ["risks", "suggestedControl", "mitigationSuggested", "mitigationControls", "controlEffectiveness", "rasStatus", "rasJustification", "rasSource", "crossLineImpacts", "resolution4557Reference"]
-};
-
+/**
+ * Proxy de comunicação com a API Serverless da Vercel.
+ */
 export const analyzeOccurrence = async (
   description: string, 
   macroprocess: string, 
   businessLine: string, 
   userExistingControl?: string
-) => {
-  // Inicialização correta com parâmetro nomeado conforme diretrizes
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
-
+): Promise<AIAnalysis> => {
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: [{ 
-        parts: [{ 
-          text: `Auditoria GIR - Resolução 4557:
-          Fato: ${description}
-          Macroprocesso: ${macroprocess}
-          Linha: ${businessLine}
-          Controle Atual: ${userExistingControl || 'N/A'}
-          
-          Gere uma análise técnica JSON completa incluindo o Plano de Ação com 3 controles (Preventivo, Detectivo e Corretivo).` 
-        }] 
-      }],
-      config: {
-        systemInstruction: "Você é o Motor de Riscos GECOR. Sua saída deve ser RIGOROSAMENTE JSON. Use terminologia bancária brasileira.",
-        responseMimeType: "application/json",
-        responseSchema: analysisSchema,
-        temperature: 0.1
-      }
+    const response = await fetch('/api/eval', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        description,
+        macroprocess,
+        businessLine,
+        userExistingControl
+      }),
     });
 
-    const result = response.text;
-    if (!result) throw new Error("Resposta nula do motor de IA.");
-    return JSON.parse(result);
+    const contentType = response.headers.get("content-type");
+    
+    // Se não for OK e não for JSON, é provável que seja um erro de configuração da Vercel (404/500 HTML)
+    if (!response.ok) {
+      if (contentType && contentType.includes("application/json")) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Erro ${response.status}: ${response.statusText}`);
+      } else {
+        const text = await response.text();
+        console.error("Erro do Servidor (HTML):", text);
+        throw new Error(`Servidor indisponível (${response.status}). Verifique se as funções da Vercel foram implantadas corretamente.`);
+      }
+    }
 
+    if (!contentType || !contentType.includes("application/json")) {
+      throw new Error("O servidor retornou um formato inesperado (não-JSON).");
+    }
+
+    const data = await response.json();
+    return data;
   } catch (error: any) {
-    console.error("[GEMINI] Erro na requisição:", error);
-    throw new Error(error.message || "Falha na comunicação com a inteligência artificial.");
+    console.error("[GIR-PROXY-ERROR]", error);
+    throw new Error(error.message || "Falha na conexão com o servidor de IA.");
   }
 };
