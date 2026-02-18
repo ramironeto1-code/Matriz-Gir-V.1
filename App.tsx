@@ -14,6 +14,7 @@ import {
   EFFICACY_REDUCTION_MAP
 } from './utils';
 import { 
+  Activity,
   LayoutDashboard, 
   ShieldAlert, 
   Loader2, 
@@ -37,7 +38,10 @@ import {
   Scale,
   ShieldCheck,
   AlertTriangle,
-  ExternalLink
+  ExternalLink,
+  Info,
+  TrendingUp,
+  ChevronRight
 } from 'lucide-react';
 
 const PERSISTENCE_VERSION = 'GIR_V2_PROD_STABLE';
@@ -82,7 +86,7 @@ const EditableControlCard: React.FC<{
         <span className="text-[7px] font-black uppercase px-2 py-1 bg-slate-800 rounded text-slate-400">{control.type}</span>
       </div>
       <h5 className="text-[10px] font-black text-slate-200 uppercase mb-1">{control.title}</h5>
-      <p className="text-[9px] text-slate-400 leading-tight italic line-clamp-2">"{control.description}"</p>
+      <p className="text-[9px] text-slate-400 leading-tight italic line-clamp-3">"{control.description}"</p>
     </div>
   );
 };
@@ -225,7 +229,9 @@ export const App: React.FC = () => {
         'Linha de Negócio': line?.name,
         'Macroprocesso': macro?.name,
         'Fato Gerador': o.description,
-        'Risco Inerente': inherent.toFixed(2),
+        'Probabilidade': o.analysis?.risks?.[0]?.probability,
+        'Impacto': o.analysis?.risks?.[0]?.impact,
+        'Score Inerente': inherent.toFixed(2),
         'Eficácia': EFFICACY_LABELS[o.analysis?.controlEffectiveness || 3],
         'Score Líquido': liquid.toFixed(2),
         'Criticidade': getRiskLevelData(liquid).label,
@@ -241,67 +247,70 @@ export const App: React.FC = () => {
   };
 
   const handleExportPDF = () => {
-    const doc = new jsPDF();
+    const doc = new jsPDF('l', 'mm', 'a4');
     const pageWidth = doc.internal.pageSize.getWidth();
 
-    // Header
+    // Capa / Cabeçalho
     doc.setFontSize(22);
-    doc.setTextColor(2, 6, 23); // dark-950
-    doc.text('Relatório Executivo GIR', 14, 25);
+    doc.setTextColor(2, 6, 23);
+    doc.text('Relatório Consolidado de Riscos - GIR', 14, 25);
     
-    doc.setFontSize(10);
+    doc.setFontSize(9);
     doc.setTextColor(100);
     doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 32);
-    doc.text(`Resolução BCB nº 4.557`, pageWidth - 50, 32);
+    doc.text(`Resolução BCB nº 4.557 - Auditoria de Controles e Riscos`, pageWidth - 85, 32);
 
-    // Sumário Executivo
-    const total = occurrences.length;
-    const alertRas = occurrences.filter(o => o.analysis?.rasStatus === 'Fora').length;
-    const avgScore = occurrences.length > 0 
-      ? occurrences.reduce((acc, curr) => acc + calculateLiquidRisk((Number(curr.analysis?.risks?.[0]?.probability || 3) + Number(curr.analysis?.risks?.[0]?.impact || 3)) / 2, curr.analysis?.controlEffectiveness || 3), 0) / occurrences.length
-      : 0;
+    let finalY = 40;
 
-    autoTable(doc, {
-      startY: 40,
-      head: [['Métrica', 'Valor']],
-      body: [
-        ['Total de Ocorrências Auditadas', total.toString()],
-        ['Fatos com Alerta RAS (Apetite Excedido)', alertRas.toString()],
-        ['Score Líquido Médio Global', avgScore.toFixed(2)],
-        ['Status de Conformidade Global', avgScore > 3.4 ? 'CRÍTICO' : 'ESTÁVEL']
-      ],
-      theme: 'grid',
-      headStyles: { fillStyle: 'F', fillColor: [30, 41, 59] }
+    // Processar cada Linha de Negócio individualmente no relatório
+    BUSINESS_LINES.forEach((line, index) => {
+      const lineOccs = occurrences.filter(o => o.businessLineId === line.id);
+      
+      if (lineOccs.length > 0 || index === 0) {
+        if (finalY > 160) { doc.addPage(); finalY = 20; }
+        
+        doc.setFontSize(14);
+        doc.setTextColor(30, 41, 59);
+        doc.text(`Linha de Negócio: ${line.name}`, 14, finalY + 10);
+        finalY += 15;
+
+        const bodyData = lineOccs.map(o => {
+          const prob = o.analysis?.risks?.[0]?.probability || 3;
+          const imp = o.analysis?.risks?.[0]?.impact || 3;
+          const inherent = (Number(prob) + Number(imp)) / 2;
+          const score = calculateLiquidRisk(inherent, o.analysis?.controlEffectiveness || 3);
+          const controls = o.analysis?.mitigationControls?.map(c => `[${c.type.charAt(0)}] ${c.title}`).join('\n') || 'N/A';
+
+          return [
+            o.date,
+            o.description,
+            inherent.toFixed(2),
+            score.toFixed(2),
+            controls,
+            o.analysis?.rasStatus || 'N/A'
+          ];
+        });
+
+        autoTable(doc, {
+          startY: finalY,
+          head: [['Data', 'Fato Gerador (Integral)', 'Risco Inerente', 'Score Líq.', 'Planos de Mitigação Sugeridos', 'RAS']],
+          body: bodyData.length > 0 ? bodyData : [['-', 'Nenhuma ocorrência registrada para esta linha nesta competência.', '-', '-', '-', '-']],
+          styles: { fontSize: 7, cellPadding: 3, overflow: 'linebreak' },
+          columnStyles: {
+            1: { cellWidth: 80 },
+            4: { cellWidth: 60 }
+          },
+          headStyles: { fillColor: [30, 41, 59], halign: 'center' },
+          didDrawPage: (data) => { finalY = data.cursor?.y || 20; }
+        });
+        
+        finalY += 10;
+      }
     });
 
-    // Detalhamento por Ocorrência
-    doc.addPage();
-    doc.text('Detalhamento da Matriz de Riscos', 14, 20);
-
-    const bodyData = occurrences.map(o => {
-      const line = BUSINESS_LINES.find(l => l.id === o.businessLineId)?.name || '';
-      const score = calculateLiquidRisk((Number(o.analysis?.risks?.[0]?.probability || 3) + Number(o.analysis?.risks?.[0]?.impact || 3)) / 2, o.analysis?.controlEffectiveness || 3);
-      return [
-        o.date,
-        line,
-        o.description.substring(0, 50) + '...',
-        score.toFixed(2),
-        o.analysis?.rasStatus || 'N/A'
-      ];
-    });
-
-    autoTable(doc, {
-      startY: 25,
-      head: [['Data', 'Linha', 'Fato', 'Score Líq.', 'Status RAS']],
-      body: bodyData,
-      styles: { fontSize: 8 },
-      headStyles: { fillColor: [2, 6, 23] }
-    });
-
-    doc.save(`Relatorio_Executivo_GIR_${Date.now()}.pdf`);
+    doc.save(`Relatorio_Executivo_GIR_Consolidado_${Date.now()}.pdf`);
   };
 
-  // Cálculos para a Governança
   const govStats = useMemo(() => {
     const total = occurrences.length;
     if (total === 0) return { avgLiquid: 0, alertCount: 0, avgMitigation: 0, linePerformance: [] };
@@ -319,14 +328,21 @@ export const App: React.FC = () => {
 
     const linePerformance = BUSINESS_LINES.map(line => {
       const lineOccs = occurrences.filter(o => o.businessLineId === line.id);
+      const lineAvgInherent = lineOccs.length > 0
+        ? lineOccs.reduce((acc, curr) => acc + (Number(curr.analysis?.risks?.[0]?.probability || 3) + Number(curr.analysis?.risks?.[0]?.impact || 3)) / 2, 0) / lineOccs.length
+        : 0;
       const lineAvgLiquid = lineOccs.length > 0 
         ? lineOccs.reduce((acc, curr) => acc + calculateLiquidRisk((Number(curr.analysis?.risks?.[0]?.probability || 3) + Number(curr.analysis?.risks?.[0]?.impact || 3)) / 2, curr.analysis?.controlEffectiveness || 3), 0) / lineOccs.length
         : 0;
+      
       return {
+        id: line.id,
         name: line.name,
         count: lineOccs.length,
+        avgInherent: lineAvgInherent,
         avgLiquid: lineAvgLiquid,
-        status: lineAvgLiquid > 3.4 ? 'Crítico' : lineAvgLiquid > 2.6 ? 'Alerta' : 'Controlado'
+        status: lineAvgLiquid > 3.4 ? 'Crítico' : lineAvgLiquid > 2.6 ? 'Alerta' : 'Controlado',
+        events: lineOccs
       };
     });
 
@@ -376,8 +392,8 @@ export const App: React.FC = () => {
                          {selectedLine.macroprocesses.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                       </select>
                    </div>
-                   <textarea className="w-full p-4 bg-slate-900 border border-slate-800 rounded-2xl h-32 text-sm" placeholder="Fato Gerador..." value={description} onChange={e => setDescription(e.target.value)} />
-                   <textarea className="w-full p-4 bg-slate-900 border border-slate-800 rounded-2xl h-24 text-sm" placeholder="Controles Atuais..." value={existingControl} onChange={e => setExistingControl(e.target.value)} />
+                   <textarea className="w-full p-4 bg-slate-900 border border-slate-800 rounded-2xl h-32 text-sm" placeholder="Fato Gerador (Atenção: todas as informações aqui inseridas serão mantidas integralmente no relatório executivo)..." value={description} onChange={e => setDescription(e.target.value)} />
+                   <textarea className="w-full p-4 bg-slate-900 border border-slate-800 rounded-2xl h-24 text-sm" placeholder="Controles Atuais da Unidade..." value={existingControl} onChange={e => setExistingControl(e.target.value)} />
                    <div className="grid grid-cols-2 gap-4 bg-slate-900/50 p-6 rounded-3xl border border-slate-800">
                       <div><label className="text-[9px] font-black text-slate-600 uppercase mb-2 block">Probabilidade</label>
                         <select className="w-full p-3 bg-slate-900 border border-slate-800 rounded-xl text-sm" value={manualProb} onChange={e => setManualProb(Number(e.target.value))}>{[1,2,3,4,5].map(v => <option key={v} value={v}>Nível {v}</option>)}</select>
@@ -391,7 +407,7 @@ export const App: React.FC = () => {
                         </select>
                       </div>
                    </div>
-                   <button type="button" onClick={handleRiskEvaluation} disabled={isAnalyzing} className="w-full py-4 bg-blue-600 font-black text-xs uppercase rounded-2xl flex items-center justify-center gap-2">
+                   <button type="button" onClick={handleRiskEvaluation} disabled={isAnalyzing} className="w-full py-4 bg-blue-600 font-black text-xs uppercase rounded-2xl flex items-center justify-center gap-2 hover:bg-blue-500 transition-colors">
                       {isAnalyzing ? <><Loader2 className="animate-spin" size={18} /> Processando...</> : <><BrainCircuit size={18}/> Avaliar com IA</>}
                    </button>
                 </div>
@@ -401,47 +417,54 @@ export const App: React.FC = () => {
                       <span className="text-[10px] font-black uppercase text-blue-400">Auditoria Técnica</span>
                       <div className={`px-4 py-1 text-[9px] font-black rounded-full border ${tempAnalysis.rasStatus === 'Fora' ? 'text-red-500 border-red-500' : 'text-emerald-400 border-emerald-500'}`}>RAS: {tempAnalysis.rasStatus}</div>
                     </div>
-                    <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800 text-center">
-                      <p className="text-[8px] font-black text-slate-600 uppercase mb-1">Score Líquido</p>
-                      <p className="text-4xl font-black">{calculateLiquidRisk((manualProb+manualImpact)/2, controlEffectiveness).toFixed(2)}</p>
+                    <div className="grid grid-cols-2 gap-4">
+                       <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800 text-center">
+                          <p className="text-[8px] font-black text-slate-600 uppercase mb-1">Inerente (P x I)</p>
+                          <p className="text-xl font-black text-slate-400">{((manualProb+manualImpact)/2).toFixed(2)}</p>
+                       </div>
+                       <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800 text-center">
+                          <p className="text-[8px] font-black text-slate-600 uppercase mb-1">Score Líquido</p>
+                          <p className="text-3xl font-black text-emerald-500">{calculateLiquidRisk((manualProb+manualImpact)/2, controlEffectiveness).toFixed(2)}</p>
+                       </div>
                     </div>
                     <div className="space-y-3">
-                      <p className="text-[9px] font-black text-slate-500 uppercase">Plano de Ação Recomendado</p>
-                      <div className="grid grid-cols-1 gap-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                      <div className="flex items-center justify-between">
+                         <p className="text-[9px] font-black text-slate-500 uppercase">Planos de Ação Recomentados</p>
+                         <Info size={14} className="text-slate-700" title="Controles Preventivos, Detectivos e Corretivos sugeridos pela IA." />
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 max-h-[350px] overflow-y-auto pr-2 custom-scrollbar">
                         {tempAnalysis.mitigationControls.map((ctrl, i) => (
                           <EditableControlCard key={i} control={ctrl} onDelete={() => {}} onUpdate={() => {}} />
                         ))}
                       </div>
                     </div>
                     <div className="pt-4 space-y-3">
-                      <button type="button" onClick={handleConfirmRegistration} className="w-full py-4 bg-emerald-600 font-black text-xs uppercase rounded-2xl">Confirmar e Gravar</button>
-                      <button type="button" onClick={handleDiscardRevision} className="w-full py-2 text-slate-500 text-[9px] font-black uppercase">{editingId ? 'Remover e Descartar' : 'Descartar'}</button>
+                      <button type="button" onClick={handleConfirmRegistration} className="w-full py-4 bg-emerald-600 font-black text-xs uppercase rounded-2xl shadow-xl hover:bg-emerald-500 transition-all">Confirmar e Gravar na Matriz</button>
+                      <button type="button" onClick={handleDiscardRevision} className="w-full py-2 text-slate-500 text-[9px] font-black uppercase hover:text-white transition-colors">{editingId ? 'Remover Registro Original e Descartar' : 'Descartar Análise'}</button>
                     </div>
                   </div>
-                ) : <div className="h-full border-2 border-dashed border-slate-800 rounded-[40px] flex items-center justify-center opacity-30 p-10 text-center text-[10px] font-black uppercase">Aguardando fato gerador...</div>}</div>
+                ) : <div className="h-full border-2 border-dashed border-slate-800 rounded-[40px] flex items-center justify-center opacity-30 p-10 text-center text-[10px] font-black uppercase">Aguardando fato gerador para análise de impacto...</div>}</div>
              </div>
           </div>
         )}
 
         {activeTab === 'governance' && (
           <div className="max-w-7xl mx-auto space-y-8 animate-in zoom-in duration-500">
-             {/* Header Executivo */}
              <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 bg-slate-900 p-10 rounded-[48px] border border-slate-800 shadow-2xl">
                 <div>
-                   <h2 className="text-3xl font-black uppercase tracking-tighter">Relatório de Governança GIR</h2>
-                   <p className="text-sm text-slate-500 mt-1 font-medium italic">Consolidado institucional sob diretrizes da Resolução BCB 4.557</p>
+                   <h2 className="text-3xl font-black uppercase tracking-tighter">Relatórios de Governança e Riscos</h2>
+                   <p className="text-sm text-slate-500 mt-1 font-medium italic">Consolidado por Linha de Negócio e Análise de Exposição Inerente</p>
                 </div>
                 <div className="flex gap-3">
-                   <button type="button" onClick={handleExportExcel} className="px-6 py-4 bg-slate-800 font-black text-[10px] uppercase rounded-2xl flex items-center gap-2 hover:bg-slate-700 transition-colors"><Download size={16}/> Excel</button>
-                   <button type="button" onClick={handleExportPDF} className="px-6 py-4 bg-blue-600 font-black text-[10px] uppercase rounded-2xl flex items-center gap-2 hover:bg-blue-500 transition-colors"><FileText size={16}/> PDF Executivo</button>
+                   <button type="button" onClick={handleExportExcel} className="px-6 py-4 bg-slate-800 font-black text-[10px] uppercase rounded-2xl flex items-center gap-2 hover:bg-slate-700 transition-colors"><Download size={16}/> Base de Dados</button>
+                   <button type="button" onClick={handleExportPDF} className="px-6 py-4 bg-blue-600 font-black text-[10px] uppercase rounded-2xl flex items-center gap-2 hover:bg-blue-500 transition-all shadow-lg shadow-blue-900/20"><FileText size={16}/> Exportar PDF Consolidado</button>
                 </div>
              </div>
 
-             {/* KPIs de Performance Institucional */}
              <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                 <div className="bg-slate-900/50 p-8 rounded-[36px] border border-slate-800/50 backdrop-blur-sm group hover:border-blue-500/30 transition-all">
                    <div className="p-3 bg-blue-600/10 rounded-xl w-fit mb-4 text-blue-500"><BarChart3 size={24}/></div>
-                   <p className="text-[10px] font-black text-slate-600 uppercase mb-1">Score Médio Global</p>
+                   <p className="text-[10px] font-black text-slate-600 uppercase mb-1">Risco Líquido Global</p>
                    <p className="text-4xl font-black text-slate-100">{govStats.avgLiquid.toFixed(2)}</p>
                    <div className="mt-4 flex items-center gap-2">
                       <div className={`h-1.5 flex-1 rounded-full bg-slate-800 overflow-hidden`}>
@@ -453,114 +476,133 @@ export const App: React.FC = () => {
 
                 <div className="bg-slate-900/50 p-8 rounded-[36px] border border-slate-800/50 backdrop-blur-sm group hover:border-red-500/30 transition-all">
                    <div className="p-3 bg-red-600/10 rounded-xl w-fit mb-4 text-red-500"><AlertTriangle size={24}/></div>
-                   <p className="text-[10px] font-black text-slate-600 uppercase mb-1">Alertas RAS (Apetite)</p>
+                   <p className="text-[10px] font-black text-slate-600 uppercase mb-1">Fatos fora do RAS</p>
                    <p className="text-4xl font-black text-red-500">{govStats.alertCount}</p>
-                   <p className="text-[9px] text-slate-500 mt-2 font-bold uppercase italic">Excederam Limites Normativos</p>
+                   <p className="text-[9px] text-slate-500 mt-2 font-bold uppercase italic">Requer Plano de Ação</p>
                 </div>
 
                 <div className="bg-slate-900/50 p-8 rounded-[36px] border border-slate-800/50 backdrop-blur-sm group hover:border-emerald-500/30 transition-all">
                    <div className="p-3 bg-emerald-600/10 rounded-xl w-fit mb-4 text-emerald-500"><ShieldCheck size={24}/></div>
-                   <p className="text-[10px] font-black text-slate-600 uppercase mb-1">Eficácia de Mitigação</p>
+                   <p className="text-[10px] font-black text-slate-600 uppercase mb-1">Redução de Exposição</p>
                    <p className="text-4xl font-black text-emerald-500">{govStats.avgMitigation.toFixed(1)}%</p>
-                   <p className="text-[9px] text-slate-500 mt-2 font-bold uppercase italic">Redução Média de Exposição</p>
+                   <p className="text-[9px] text-slate-500 mt-2 font-bold uppercase italic">Eficácia dos Controles</p>
                 </div>
 
                 <div className="bg-slate-900/50 p-8 rounded-[36px] border border-slate-800/50 backdrop-blur-sm group hover:border-slate-500/30 transition-all">
                    <div className="p-3 bg-slate-600/10 rounded-xl w-fit mb-4 text-slate-400"><Scale size={24}/></div>
-                   <p className="text-[10px] font-black text-slate-600 uppercase mb-1">Status 4.557</p>
-                   <p className="text-3xl font-black text-slate-100">{govStats.avgLiquid < 3.4 ? 'CONFORME' : 'ATENÇÃO'}</p>
-                   <p className="text-[9px] text-slate-500 mt-2 font-bold uppercase italic">Governança Corporativa</p>
+                   <p className="text-[10px] font-black text-slate-600 uppercase mb-1">Conformidade 4.557</p>
+                   <p className="text-3xl font-black text-slate-100">{govStats.avgLiquid < 3.4 ? 'ADHERENTE' : 'EM REVISÃO'}</p>
+                   <p className="text-[9px] text-slate-500 mt-2 font-bold uppercase italic">Auditoria Governamental</p>
                 </div>
              </div>
 
-             {/* Tabela de Performance por Linha de Negócio */}
-             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <div className="lg:col-span-2 bg-slate-900 p-10 rounded-[48px] border border-slate-800 shadow-xl">
-                   <div className="flex justify-between items-center mb-8">
-                      <h3 className="text-xl font-black uppercase tracking-tight">Análise de Performance GIR</h3>
-                      <button className="text-[10px] font-black text-blue-500 uppercase flex items-center gap-1">Ver todos <ExternalLink size={12}/></button>
-                   </div>
-                   <div className="overflow-x-auto">
-                      <table className="w-full border-collapse">
-                         <thead>
-                            <tr className="border-b border-slate-800 text-left">
-                               <th className="pb-4 text-[10px] font-black text-slate-600 uppercase">Linha de Negócio</th>
-                               <th className="pb-4 text-[10px] font-black text-slate-600 uppercase text-center">Volume</th>
-                               <th className="pb-4 text-[10px] font-black text-slate-600 uppercase text-center">Score Líquido</th>
-                               <th className="pb-4 text-[10px] font-black text-slate-600 uppercase text-right">Status Governança</th>
-                            </tr>
-                         </thead>
-                         <tbody>
-                            {govStats.linePerformance.map((lp, i) => (
-                               <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-950/50 transition-colors">
-                                  <td className="py-5 font-bold text-sm text-slate-300">{lp.name}</td>
-                                  <td className="py-5 text-center font-black text-slate-400">{lp.count}</td>
-                                  <td className="py-5 text-center font-black text-slate-100">{lp.avgLiquid.toFixed(2)}</td>
-                                  <td className="py-5 text-right">
-                                     <span className={`px-4 py-1.5 rounded-full text-[9px] font-black uppercase ${lp.status === 'Crítico' ? 'bg-red-600/10 text-red-500 border border-red-500/20' : lp.status === 'Alerta' ? 'bg-yellow-400/10 text-yellow-500 border border-yellow-400/20' : 'bg-emerald-600/10 text-emerald-500 border border-emerald-500/20'}`}>
-                                        {lp.status}
-                                     </span>
-                                  </td>
-                               </tr>
-                            ))}
-                         </tbody>
-                      </table>
-                   </div>
-                </div>
-
-                {/* Pilares Resolução 4557 */}
-                <div className="bg-slate-900 p-10 rounded-[48px] border border-slate-800 shadow-xl">
-                   <h3 className="text-xl font-black uppercase tracking-tight mb-8">Conformidade 4.557</h3>
-                   <div className="space-y-6">
-                      {[
-                         { label: 'RAS (Apetite)', status: govStats.alertCount === 0 },
-                         { label: 'GIR (Integração)', status: occurrences.length > 0 },
-                         { label: 'Eficácia Controles', status: govStats.avgMitigation > 70 },
-                         { label: 'Auditoria TI', status: occurrences.some(o => o.description.toLowerCase().includes('ti') || o.description.toLowerCase().includes('tecnologia')) },
-                         { label: 'Capital/Liquidez', status: true }
-                      ].map((item, idx) => (
-                         <div key={idx} className="flex items-center justify-between p-4 bg-slate-950 rounded-2xl border border-slate-800/50">
-                            <span className="text-xs font-bold text-slate-400">{item.label}</span>
-                            {item.status ? <CheckCircle2 size={18} className="text-emerald-500" /> : <X size={18} className="text-red-500" />}
+             {/* Matriz de Detalhamento por Linha de Negócio na UI */}
+             <div className="space-y-8">
+                <h3 className="text-xl font-black uppercase tracking-tight">Detalhamento Técnico por Linha de Negócio</h3>
+                
+                <div className="grid grid-cols-1 gap-8">
+                   {govStats.linePerformance.map((lp, i) => (
+                      <div key={i} className="bg-slate-900 rounded-[48px] border border-slate-800 shadow-xl overflow-hidden">
+                         <div className="p-8 border-b border-slate-800 bg-slate-950/30 flex justify-between items-center">
+                            <div>
+                               <h4 className="text-lg font-black text-slate-200 uppercase">{lp.name}</h4>
+                               <p className="text-[10px] text-slate-500 font-bold uppercase mt-1">{lp.count} eventos auditados</p>
+                            </div>
+                            <div className="flex gap-10">
+                               <div className="text-center">
+                                  <p className="text-[8px] font-black text-slate-600 uppercase mb-1">Inerente Médio</p>
+                                  <p className="text-xl font-black text-slate-400">{lp.avgInherent.toFixed(2)}</p>
+                               </div>
+                               <div className="text-center">
+                                  <p className="text-[8px] font-black text-slate-600 uppercase mb-1">Líquido Médio</p>
+                                  <p className="text-xl font-black text-slate-100">{lp.avgLiquid.toFixed(2)}</p>
+                               </div>
+                               <div className="flex items-center">
+                                  <span className={`px-4 py-1.5 rounded-full text-[9px] font-black uppercase ${lp.status === 'Crítico' ? 'bg-red-600/10 text-red-500 border border-red-500/20' : lp.status === 'Alerta' ? 'bg-yellow-400/10 text-yellow-500 border border-yellow-400/20' : 'bg-emerald-600/10 text-emerald-500 border border-emerald-500/20'}`}>
+                                     {lp.status}
+                                  </span>
+                               </div>
+                            </div>
                          </div>
-                      ))}
-                   </div>
-                   <div className="mt-8 p-6 bg-blue-600/5 rounded-3xl border border-blue-500/10">
-                      <p className="text-[9px] font-bold text-slate-500 uppercase leading-relaxed italic">
-                        "As instituições devem manter estrutura de gerenciamento de riscos compatível com a natureza do modelo de negócio e complexidade das operações." - Art. 3º Res. 4557
-                      </p>
-                   </div>
+                         <div className="p-0">
+                            {lp.events.length > 0 ? (
+                               <table className="w-full border-collapse">
+                                  <thead>
+                                     <tr className="bg-slate-950/50 text-left">
+                                        <th className="px-8 py-4 text-[9px] font-black text-slate-600 uppercase">Data</th>
+                                        <th className="px-8 py-4 text-[9px] font-black text-slate-600 uppercase">Macroprocesso</th>
+                                        <th className="px-8 py-4 text-[9px] font-black text-slate-600 uppercase">Fato Gerador</th>
+                                        <th className="px-8 py-4 text-[9px] font-black text-slate-600 uppercase text-center">Inerente</th>
+                                        <th className="px-8 py-4 text-[9px] font-black text-slate-600 uppercase text-center">Líquido</th>
+                                        <th className="px-8 py-4 text-[9px] font-black text-slate-600 uppercase text-right">Ação</th>
+                                     </tr>
+                                  </thead>
+                                  <tbody>
+                                     {lp.events.map((ev, eidx) => {
+                                        const inh = (Number(ev.analysis?.risks?.[0]?.probability || 3) + Number(ev.analysis?.risks?.[0]?.impact || 3)) / 2;
+                                        const liq = calculateLiquidRisk(inh, ev.analysis?.controlEffectiveness || 3);
+                                        const macro = BUSINESS_LINES.find(bl => bl.id === ev.businessLineId)?.macroprocesses.find(m => m.id === ev.macroprocessId)?.name;
+                                        return (
+                                           <tr key={eidx} className="border-b border-slate-800/50 hover:bg-slate-950/20 transition-colors">
+                                              <td className="px-8 py-5 text-xs font-bold text-slate-500">{ev.date}</td>
+                                              <td className="px-8 py-5 text-xs font-black text-slate-400 uppercase italic">{macro}</td>
+                                              <td className="px-8 py-5 text-sm text-slate-300 font-medium max-w-xs truncate">{ev.description}</td>
+                                              <td className="px-8 py-5 text-center font-black text-slate-500">{inh.toFixed(2)}</td>
+                                              <td className="px-8 py-5 text-center font-black text-slate-100">{liq.toFixed(2)}</td>
+                                              <td className="px-8 py-5 text-right">
+                                                 <button onClick={() => handleReanalyze(ev)} className="p-2 text-blue-500 hover:bg-blue-600/10 rounded-lg transition-all"><ExternalLink size={16}/></button>
+                                              </td>
+                                           </tr>
+                                        );
+                                     })}
+                                  </tbody>
+                               </table>
+                            ) : (
+                               <div className="p-12 text-center opacity-30">
+                                  <Info size={32} className="mx-auto mb-4" />
+                                  <p className="text-[10px] font-black uppercase tracking-widest">Nenhum evento registrado nesta linha de negócio</p>
+                               </div>
+                            )}
+                         </div>
+                      </div>
+                   ))}
                 </div>
              </div>
 
-             {/* Impactos Transversais Detalhados */}
+             {/* Seção de Impactos Cruzados */}
              <div className="bg-slate-900 p-10 rounded-[48px] border border-slate-800 shadow-xl">
-                <h3 className="text-xl font-black uppercase tracking-tight mb-8">Análise de Impactos Transversais (Risco de Contágio)</h3>
+                <div className="flex items-center justify-between mb-8">
+                   <h3 className="text-xl font-black uppercase tracking-tight">Análise de Interdependência (Contágio)</h3>
+                   <span className="text-[10px] font-black text-slate-500 uppercase">Impactos Detectados pela IA: {occurrences.filter(o => o.analysis?.crossLineImpacts && o.analysis.crossLineImpacts.length > 0).length}</span>
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                   {occurrences.filter(o => o.analysis?.crossLineImpacts && o.analysis.crossLineImpacts.length > 0).slice(0, 6).map((o, idx) => (
-                      <div key={idx} className="bg-slate-950 p-6 rounded-3xl border border-slate-800 hover:border-blue-500/30 transition-all">
-                         <div className="flex items-center justify-between mb-4">
-                            <span className="text-[9px] font-black text-slate-600 uppercase italic">ID: {o.id.substring(0, 8)}</span>
-                            <span className="p-2 bg-blue-600/10 rounded-lg text-blue-500"><Sparkles size={14}/></span>
+                   {occurrences.filter(o => o.analysis?.crossLineImpacts && o.analysis.crossLineImpacts.length > 0).map((o, idx) => (
+                      <div key={idx} className="bg-slate-950 p-8 rounded-3xl border border-slate-800 hover:border-blue-500/50 transition-all group flex flex-col justify-between h-full">
+                         <div>
+                            <div className="flex items-center justify-between mb-4">
+                               <span className="text-[9px] font-black text-slate-600 uppercase italic">Ref: {o.id.substring(0, 8)}</span>
+                               <span className="p-2 bg-blue-600/10 rounded-lg text-blue-500 group-hover:bg-blue-600 group-hover:text-white transition-all"><Sparkles size={14}/></span>
+                            </div>
+                            <p className="text-xs font-bold text-slate-200 mb-6 leading-relaxed italic line-clamp-3">"{o.description}"</p>
                          </div>
-                         <p className="text-xs font-bold text-slate-300 line-clamp-2 mb-4 leading-relaxed">"{o.description}"</p>
-                         <div className="pt-4 border-t border-slate-800">
-                            <p className="text-[8px] font-black text-slate-600 uppercase mb-2">Linhas Impactadas:</p>
+                         <div className="pt-4 border-t border-slate-800/50">
+                            <p className="text-[8px] font-black text-slate-500 uppercase mb-3">Linhas de Contágio:</p>
                             <div className="flex flex-wrap gap-2">
                                {o.analysis?.crossLineImpacts.map((cl, cidx) => (
-                                  <span key={cidx} className="px-3 py-1 bg-slate-900 rounded-full text-[8px] font-black text-blue-400 border border-blue-400/10">
-                                     {BUSINESS_LINES.find(bl => bl.id === cl.businessLineId)?.name || cl.businessLineId}
-                                  </span>
+                                  <div key={cidx} className="bg-slate-900 px-3 py-2 rounded-xl border border-slate-800/50 hover:border-blue-400 transition-colors w-full">
+                                     <div className="flex items-center gap-2">
+                                        <ChevronRight size={10} className="text-blue-500" />
+                                        <p className="text-[8px] font-black text-blue-400 uppercase tracking-tighter">
+                                           {BUSINESS_LINES.find(bl => bl.id === cl.businessLineId)?.name || cl.businessLineId}
+                                        </p>
+                                     </div>
+                                     <p className="text-[7px] text-slate-500 mt-1 leading-tight">{cl.reason}</p>
+                                  </div>
                                ))}
                             </div>
                          </div>
                       </div>
                    ))}
-                   {occurrences.filter(o => o.analysis?.crossLineImpacts && o.analysis.crossLineImpacts.length > 0).length === 0 && (
-                      <div className="col-span-3 py-10 text-center opacity-30">
-                         <p className="text-[10px] font-black uppercase tracking-widest">Nenhum impacto transversal detectado nos fatos atuais</p>
-                      </div>
-                   )}
                 </div>
              </div>
           </div>
@@ -568,28 +610,47 @@ export const App: React.FC = () => {
 
         {activeTab === 'history' && (
           <div className="max-w-6xl mx-auto space-y-4 animate-in fade-in duration-500">
-             <div className="flex justify-between items-center mb-4"><h2 className="text-2xl font-black uppercase">Histórico da Matriz</h2></div>
+             <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-black uppercase">Histórico de Auditorias GIR</h2>
+                <div className="flex gap-2">
+                   <div className="px-4 py-2 bg-slate-900 border border-slate-800 rounded-xl text-[10px] font-black text-slate-400 uppercase">Total: {occurrences.length}</div>
+                </div>
+             </div>
              {occurrences.length === 0 ? (
-               <div className="py-20 text-center opacity-30">
-                  <History size={48} className="mx-auto mb-4" />
-                  <p className="text-sm font-black uppercase">O histórico está vazio.</p>
+               <div className="py-24 text-center border-2 border-dashed border-slate-800 rounded-[48px]">
+                  <History size={64} className="mx-auto mb-6 text-slate-800" />
+                  <p className="text-sm font-black uppercase text-slate-600 tracking-widest">A base de dados histórica está vazia.</p>
                </div>
              ) : (
                occurrences.map(occ => {
-                 const liq = calculateLiquidRisk((Number(occ.analysis?.risks?.[0]?.probability || 3) + Number(occ.analysis?.risks?.[0]?.impact || 3))/2, occ.analysis?.controlEffectiveness || 3);
+                 const prob = occ.analysis?.risks?.[0]?.probability || 3;
+                 const imp = occ.analysis?.risks?.[0]?.impact || 3;
+                 const liq = calculateLiquidRisk((Number(prob) + Number(imp))/2, occ.analysis?.controlEffectiveness || 3);
                  return (
-                   <div key={occ.id} className="bg-slate-900 p-6 rounded-3xl border border-slate-800 flex items-center justify-between hover:border-slate-700 transition-all">
-                      <div className="flex items-center gap-6 truncate">
-                         <div className={`w-3 h-3 rounded-full ${getRiskLevelData(liq).color}`}></div>
-                         <div className="truncate"><p className="text-[9px] font-black text-slate-600 uppercase mb-1">{occ.date} • {BUSINESS_LINES.find(l => l.id === occ.businessLineId)?.name}</p>
-                            <p className="text-sm font-bold text-slate-200 truncate max-w-2xl">{occ.description}</p>
+                   <div key={occ.id} className="bg-slate-900 p-8 rounded-[36px] border border-slate-800 flex items-center justify-between hover:border-slate-500 hover:shadow-2xl transition-all group">
+                      <div className="flex items-center gap-8 truncate">
+                         <div className={`w-4 h-4 rounded-full shadow-lg ${getRiskLevelData(liq).color}`}></div>
+                         <div className="truncate">
+                            <div className="flex items-center gap-3 mb-2">
+                               <p className="text-[10px] font-black text-blue-500 uppercase tracking-tighter">{occ.date}</p>
+                               <span className="w-1 h-1 rounded-full bg-slate-700"></span>
+                               <p className="text-[10px] font-black text-slate-500 uppercase">{BUSINESS_LINES.find(l => l.id === occ.businessLineId)?.name}</p>
+                            </div>
+                            <p className="text-base font-bold text-slate-100 truncate max-w-2xl leading-relaxed">"{occ.description}"</p>
                          </div>
                       </div>
-                      <div className="flex items-center gap-4">
-                         <div className="text-right mr-4"><p className="text-[8px] font-black text-slate-600 uppercase">Score</p><p className="text-lg font-black">{liq.toFixed(2)}</p></div>
-                         <div className="flex gap-2">
-                           <button type="button" onClick={() => handleReanalyze(occ)} className="p-3 text-slate-500 hover:text-blue-400 rounded-xl"><RefreshCw size={20}/></button>
-                           <button type="button" onClick={() => handleDelete(occ.id)} className="p-3 text-slate-500 hover:text-red-500 rounded-xl"><Trash2 size={20}/></button>
+                      <div className="flex items-center gap-6">
+                         <div className="text-center px-4 py-2 bg-slate-950 rounded-2xl border border-slate-800">
+                            <p className="text-[8px] font-black text-slate-600 uppercase mb-1">Inerente</p>
+                            <p className="text-sm font-black text-slate-400">{((prob+imp)/2).toFixed(2)}</p>
+                         </div>
+                         <div className="text-right min-w-[80px]">
+                            <p className="text-[8px] font-black text-slate-600 uppercase mb-1">Score Líquido</p>
+                            <p className={`text-2xl font-black ${liq > 3.4 ? 'text-red-500' : 'text-slate-100'}`}>{liq.toFixed(2)}</p>
+                         </div>
+                         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                           <button title="Reanalisar / Editar" type="button" onClick={() => handleReanalyze(occ)} className="p-3 bg-blue-600/10 text-blue-500 hover:bg-blue-600 hover:text-white rounded-xl transition-all"><RefreshCw size={20}/></button>
+                           <button title="Excluir Definitivamente" type="button" onClick={() => handleDelete(occ.id)} className="p-3 bg-red-600/10 text-red-500 hover:bg-red-600 hover:text-white rounded-xl transition-all"><Trash2 size={20}/></button>
                          </div>
                       </div>
                    </div>
