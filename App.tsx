@@ -253,16 +253,16 @@ export const App: React.FC = () => {
     // Capa / Cabeçalho
     doc.setFontSize(22);
     doc.setTextColor(2, 6, 23);
-    doc.text('Relatório Consolidado de Riscos - GIR', 14, 25);
+    doc.text('Relatório Consolidado de Riscos e Auditoria - GIR', 14, 25);
     
     doc.setFontSize(9);
     doc.setTextColor(100);
     doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 32);
-    doc.text(`Resolução BCB nº 4.557 - Auditoria de Controles e Riscos`, pageWidth - 85, 32);
+    doc.text(`Resolução BCB nº 4.557 - GECOR Corporativo`, pageWidth - 85, 32);
 
     let finalY = 40;
 
-    // Processar cada Linha de Negócio individualmente no relatório
+    // Processar cada Linha de Negócio individualmente
     BUSINESS_LINES.forEach((line, index) => {
       const lineOccs = occurrences.filter(o => o.businessLineId === line.id);
       
@@ -279,28 +279,39 @@ export const App: React.FC = () => {
           const imp = o.analysis?.risks?.[0]?.impact || 3;
           const inherent = (Number(prob) + Number(imp)) / 2;
           const score = calculateLiquidRisk(inherent, o.analysis?.controlEffectiveness || 3);
-          const controls = o.analysis?.mitigationControls?.map(c => `[${c.type.charAt(0)}] ${c.title}`).join('\n') || 'N/A';
+          
+          // Detalhar todos os riscos envolvidos
+          const risksText = o.analysis?.risks?.map(r => 
+            `• [${r.type}] ${r.justification}\n  (Ref: ${r.normativeCitation})`
+          ).join('\n\n') || 'N/A';
+
+          // Detalhar planos de ação (Títulos e Descrições integrais)
+          const controlsText = o.analysis?.mitigationControls?.map(c => 
+            `[${c.type}] ${c.title}:\n"${c.description}"`
+          ).join('\n\n') || 'N/A';
 
           return [
             o.date,
             o.description,
-            inherent.toFixed(2),
-            score.toFixed(2),
-            controls,
+            risksText,
+            `Inerente: ${inherent.toFixed(2)}\nLíquido: ${score.toFixed(2)}`,
+            controlsText,
             o.analysis?.rasStatus || 'N/A'
           ];
         });
 
         autoTable(doc, {
           startY: finalY,
-          head: [['Data', 'Fato Gerador (Integral)', 'Risco Inerente', 'Score Líq.', 'Planos de Mitigação Sugeridos', 'RAS']],
-          body: bodyData.length > 0 ? bodyData : [['-', 'Nenhuma ocorrência registrada para esta linha nesta competência.', '-', '-', '-', '-']],
-          styles: { fontSize: 7, cellPadding: 3, overflow: 'linebreak' },
+          head: [['Data', 'Fato Gerador', 'Riscos Envolvidos (Tipo/Justificativa)', 'Scores (I/L)', 'Planos de Ação Recomentados', 'RAS']],
+          body: bodyData.length > 0 ? bodyData : [['-', 'Nenhuma ocorrência registrada para esta linha.', '-', '-', '-', '-']],
+          styles: { fontSize: 6, cellPadding: 2, overflow: 'linebreak' },
           columnStyles: {
-            1: { cellWidth: 80 },
-            4: { cellWidth: 60 }
+            1: { cellWidth: 40 }, // Fato Gerador
+            2: { cellWidth: 70 }, // Riscos Envolvidos
+            3: { cellWidth: 20 }, // Scores
+            4: { cellWidth: 80 }, // Planos de Ação
           },
-          headStyles: { fillColor: [30, 41, 59], halign: 'center' },
+          headStyles: { fillColor: [30, 41, 59], halign: 'center', fontSize: 7 },
           didDrawPage: (data) => { finalY = data.cursor?.y || 20; }
         });
         
@@ -308,7 +319,7 @@ export const App: React.FC = () => {
       }
     });
 
-    doc.save(`Relatorio_Executivo_GIR_Consolidado_${Date.now()}.pdf`);
+    doc.save(`Relatorio_Integral_GIR_${Date.now()}.pdf`);
   };
 
   const govStats = useMemo(() => {
@@ -429,7 +440,7 @@ export const App: React.FC = () => {
                     </div>
                     <div className="space-y-3">
                       <div className="flex items-center justify-between">
-                         <p className="text-[9px] font-black text-slate-500 uppercase">Planos de Ação Recomentados</p>
+                         <p className="text-[9px] font-black text-slate-500 uppercase">Planos de Ação Recomendados</p>
                          <Info size={14} className="text-slate-700" title="Controles Preventivos, Detectivos e Corretivos sugeridos pela IA." />
                       </div>
                       <div className="grid grid-cols-1 gap-3 max-h-[350px] overflow-y-auto pr-2 custom-scrollbar">
@@ -457,7 +468,7 @@ export const App: React.FC = () => {
                 </div>
                 <div className="flex gap-3">
                    <button type="button" onClick={handleExportExcel} className="px-6 py-4 bg-slate-800 font-black text-[10px] uppercase rounded-2xl flex items-center gap-2 hover:bg-slate-700 transition-colors"><Download size={16}/> Base de Dados</button>
-                   <button type="button" onClick={handleExportPDF} className="px-6 py-4 bg-blue-600 font-black text-[10px] uppercase rounded-2xl flex items-center gap-2 hover:bg-blue-500 transition-all shadow-lg shadow-blue-900/20"><FileText size={16}/> Exportar PDF Consolidado</button>
+                   <button type="button" onClick={handleExportPDF} className="px-6 py-4 bg-blue-600 font-black text-[10px] uppercase rounded-2xl flex items-center gap-2 hover:bg-blue-500 transition-all shadow-lg shadow-blue-900/20"><FileText size={16}/> Exportar PDF Integral</button>
                 </div>
              </div>
 
@@ -491,7 +502,7 @@ export const App: React.FC = () => {
                 <div className="bg-slate-900/50 p-8 rounded-[36px] border border-slate-800/50 backdrop-blur-sm group hover:border-slate-500/30 transition-all">
                    <div className="p-3 bg-slate-600/10 rounded-xl w-fit mb-4 text-slate-400"><Scale size={24}/></div>
                    <p className="text-[10px] font-black text-slate-600 uppercase mb-1">Conformidade 4.557</p>
-                   <p className="text-3xl font-black text-slate-100">{govStats.avgLiquid < 3.4 ? 'ADHERENTE' : 'EM REVISÃO'}</p>
+                   <p className="text-3xl font-black text-slate-100">{govStats.avgLiquid < 3.4 ? 'ADERENTE' : 'EM REVISÃO'}</p>
                    <p className="text-[9px] text-slate-500 mt-2 font-bold uppercase italic">Auditoria Governamental</p>
                 </div>
              </div>
